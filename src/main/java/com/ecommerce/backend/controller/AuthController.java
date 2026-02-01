@@ -6,28 +6,21 @@ import com.ecommerce.backend.payload.request.SignupRequest;
 import com.ecommerce.backend.payload.response.JwtResponse;
 import com.ecommerce.backend.payload.response.MessageResponse;
 import com.ecommerce.backend.repository.UserRepository;
-import com.ecommerce.backend.security.service.UserDetailsImpl;
 import com.ecommerce.backend.util.JwtUtils;
+import com.ecommerce.backend.service.MailService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.ResponseEntity;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping("/api")
 public class AuthController {
-	@Autowired
-	AuthenticationManager authenticationManager;
-
 	@Autowired
 	UserRepository userRepository;
 
@@ -40,17 +33,11 @@ public class AuthController {
 	@PostMapping("/login")
 	public ResponseEntity<?> authenticateUser(@Valid @RequestBody LoginRequest loginRequest) {
 		
-		// 0. Check if user exists (Optional, AuthenticationManager handles it but for custom error message)
-		// But in Node.js:
+		// Match Node.js logic EXACTLY:
 		// 1. Find user -> if not exist return 400
 		// 2. Check blocked -> return 403
 		// 3. Compare password -> return 400
-		
-		// We can use AuthenticationManager, but catching exceptions to match Node.js responses exactly
-		// might be tricky. Let's try standard Spring Security flow first.
-		
-		// Actually, to match Node.js logic of "User blocked" BEFORE password check (or after),
-		// we should fetch user first.
+		// 4. Generate tokens
 		
 		var userOpt = userRepository.findByUsername(loginRequest.getUsername());
 		if (userOpt.isEmpty()) {
@@ -62,39 +49,23 @@ public class AuthController {
 			return ResponseEntity.status(403).body(new MessageResponse("Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên."));
 		}
 
-		try {
-			Authentication authentication = authenticationManager.authenticate(
-					new UsernamePasswordAuthenticationToken(loginRequest.getUsername(), loginRequest.getPassword()));
-
-			SecurityContextHolder.getContext().setAuthentication(authentication);
-			
-			String jwt = jwtUtils.generateJwtToken(loginRequest.getUsername());
-			String refreshToken = jwtUtils.generateRefreshToken(loginRequest.getUsername());
-
-			UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal(); // Assuming local auth uses this
-			
-			// If we are here, password matched.
-			
-			return ResponseEntity.ok(new JwtResponse(jwt,
-					refreshToken,
-					userDetails.getId(),
-					userDetails.getUsername(),
-					userDetails.getRole(),
-					user.getAvatar())); // Fetch avatar from entity, userDetails might not have it updated? 
-										// Actually UserDetailsImpl has fields from User entity at build time.
-										// But avatar is not in UserDetailsImpl constructor I made? 
-										// I made it in UserDetailsImpl. Let's check constructor.
-										// UserDetailsImpl definition has avatar? I didn't add it in the file tool call I made earlier?
-										// I need to check UserDetailsImpl. It had `id, username, email, password, role, isBlocked`.
-										// I forgot `avatar` in UserDetailsImpl!
-										// I should probably fetch it from `user` object directly here since I have it.
-										// Yes `user` variable is available. Use `user.getAvatar()`.
-
-		} catch (Exception e) {
+		// 3. Compare password - Match Node.js: bcrypt.compare(password, this.password)
+		if (user.getPassword() == null || !encoder.matches(loginRequest.getPassword(), user.getPassword())) {
 			return ResponseEntity.badRequest().body(new MessageResponse("Mật khẩu không chính xác"));
 		}
-	}
+		
+		// 4. Generate tokens
+		String jwt = jwtUtils.generateJwtToken(user);
+		String refreshToken = jwtUtils.generateRefreshToken(user);
 
+		return ResponseEntity.ok(new JwtResponse(jwt,
+				refreshToken,
+				user.getId(),
+				user.getUsername(),
+				user.getRole(),
+				user.getAvatar()));
+	}
+	
 	@PostMapping("/register")
 	public ResponseEntity<?> registerUser(@Valid @RequestBody SignupRequest signUpRequest) {
 		if (userRepository.existsByUsername(signUpRequest.getUsername())) {
@@ -104,108 +75,54 @@ public class AuthController {
 		}
 
 		// Create new user's account
+		String hashedPassword = encoder.encode(signUpRequest.getPassword());
+		System.out.println("DEBUG: Original password: " + signUpRequest.getPassword());
+		System.out.println("DEBUG: Hashed password: " + hashedPassword);
+		
 		User user = User.builder()
 				.username(signUpRequest.getUsername())
-				.password(encoder.encode(signUpRequest.getPassword()))
+				.password(hashedPassword)
 				.role("user")
 				.authType("local")
 				.build();
 
 		userRepository.save(user);
+		
+		System.out.println("DEBUG: Saved user password from DB: " + userRepository.findByUsername(signUpRequest.getUsername()).get().getPassword());
 
 		return ResponseEntity.status(201).body(new MessageResponse("User created successfully"));
 	}
 	
 	@PostMapping("/refresh-token")
 	public ResponseEntity<?> refreshToken(@RequestBody Map<String, String> request) {
-		String requestRefreshToken = request.get("token");
+		String refreshToken = request.get("token");
 		
-		if (requestRefreshToken == null || requestRefreshToken.isEmpty()) {
-			return ResponseEntity.status(403).body(new MessageResponse("No refresh token provided"));
+		if (refreshToken == null || refreshToken.isEmpty()) {
+			return ResponseEntity.badRequest().body(new MessageResponse("Refresh token is required"));
 		}
 		
-		if (jwtUtils.validateJwtToken(requestRefreshToken)) {
-			String username = jwtUtils.getUserNameFromJwtToken(requestRefreshToken);
+		try {
+			String username = jwtUtils.getUsernameFromRefreshToken(refreshToken);
 			
-			// Check if user is blocked or deleted
+			// Fetch user for additional info
 			var userOpt = userRepository.findByUsername(username);
-			if (userOpt.isEmpty() || userOpt.get().isBlocked()) {
-				return ResponseEntity.status(403).body(new MessageResponse("User blocked or not found"));
+			if (userOpt.isEmpty()) {
+				return ResponseEntity.badRequest().body(new MessageResponse("User not found"));
 			}
 			
-			String token = jwtUtils.generateJwtToken(username);
-			// Return as JSON with accessToken key
+			// Generate new tokens
+			String newJwt = jwtUtils.generateJwtToken(userOpt.get());
+			
 			// Node.js returns: { accessToken: newAccessToken }
-			return ResponseEntity.ok(Map.of("accessToken", token));
-		} else {
-			return ResponseEntity.status(403).body(new MessageResponse("Invalid or expired refresh token"));
-		}
-	}
-	@Autowired
-	com.ecommerce.backend.service.MailService mailService;
-
-	@PostMapping("/forgot-password")
-	public ResponseEntity<?> forgotPassword(@RequestBody Map<String, String> request) {
-		String email = request.get("email");
-		if (email == null || email.isEmpty()) {
-			return ResponseEntity.badRequest().body(new MessageResponse("Vui lòng nhập email"));
-		}
-
-		User user = userRepository.findByEmail(email).orElse(null);
-		
-		if (user == null) {
-			return ResponseEntity.badRequest().body(new MessageResponse("Email không tồn tại trong hệ thống"));
-		}
-		
-		// Check block
-		if (user.isBlocked()) {
-			return ResponseEntity.status(403).body(new MessageResponse("Account is blocked"));
-		}
-		
-		if ("google".equals(user.getAuthType())) {
-			return ResponseEntity.badRequest().body(new MessageResponse("Google account cannot reset password here"));
-		}
-
-		// Generate token
-		String token = java.util.UUID.randomUUID().toString();
-		user.setResetPasswordToken(token);
-		user.setResetPasswordExpires(new java.util.Date(System.currentTimeMillis() + 3600000)); // 1 hour
-		userRepository.save(user);
-
-		String resetUrl = "http://localhost:5173/reset-password/" + token;
-		String emailContent = "Click the link to reset your password: " + resetUrl;
-
-		try {
-			mailService.sendEmail(email, "Password Reset Request", emailContent);
-			return ResponseEntity.ok(new MessageResponse("Reset link sent to your email"));
+			return ResponseEntity.ok(Map.of("accessToken", newJwt));
+					
 		} catch (Exception e) {
-			return ResponseEntity.internalServerError().body(new MessageResponse("Lỗi khi gửi email: " + e.getMessage()));
+			return ResponseEntity.badRequest().body(new MessageResponse("Invalid refresh token"));
 		}
 	}
 	
-	@PostMapping("/reset-password")
-	public ResponseEntity<?> resetPassword(@RequestBody Map<String, String> request) {
-		String token = request.get("token");
-		String newPassword = request.get("newPassword");
-		
-		if (token == null || newPassword == null) {
-			return ResponseEntity.badRequest().body(new MessageResponse("Token and newPassword are required"));
-		}
-		
-		java.util.Date now = new java.util.Date();
-		User user = userRepository.findByResetPasswordTokenAndResetPasswordExpiresGreaterThan(token, now).orElse(null);
-		
-		if (user == null) {
-			return ResponseEntity.badRequest().body(new MessageResponse("Token is invalid or has expired"));
-		}
-		
-		user.setPassword(encoder.encode(newPassword));
-		user.setResetPasswordToken(null);
-		user.setResetPasswordExpires(null);
-		userRepository.save(user);
-		
-		return ResponseEntity.ok(new MessageResponse("Password has been reset successfully"));
-	}
+	@Autowired
+	MailService mailService;
 
 	@Value("${google.client.id}")
 	String googleClientId;
@@ -235,27 +152,22 @@ public class AuthController {
 			String email = payload.getEmail();
 			String pictureUrl = (String) payload.get("picture");
 
-			// Check user exists
-			User user = userRepository.findByEmail(email).orElse(null);
-			if (user == null) {
-				// Also check by username if logic uses email as username
-				user = userRepository.findByUsername(email).orElse(null);
-			}
+			// Check user exists (logic matches Node.js: find by username which stores email)
+			User user = userRepository.findByUsername(email).orElse(null);
 
 			if (user != null) {
 				if (user.isBlocked()) {
 					return ResponseEntity.status(403).body(new MessageResponse("Tài khoản Google này đã bị khóa truy cập hệ thống."));
 				}
 				// Update avatar
-				if ("google".equals(user.getAuthType()) && pictureUrl != null && !pictureUrl.equals(user.getAvatar())) {
+				if ("google".equals(user.getAuthType()) && (user.getAvatar() == null || !pictureUrl.equals(user.getAvatar()))) {
 					user.setAvatar(pictureUrl);
 					userRepository.save(user);
 				}
 			} else {
-				// Create new user
+				// Create new user (matching Node.js User constructor)
 				user = User.builder()
 						.username(email)
-						.email(email)
 						.authType("google")
 						.avatar(pictureUrl)
 						.role("user") 
@@ -263,8 +175,8 @@ public class AuthController {
 				userRepository.save(user);
 			}
 
-			String jwt = jwtUtils.generateJwtToken(user.getUsername());
-			String refreshToken = jwtUtils.generateRefreshToken(user.getUsername());
+			String jwt = jwtUtils.generateJwtToken(user);
+			String refreshToken = jwtUtils.generateRefreshToken(user);
 
 			return ResponseEntity.ok(new JwtResponse(jwt,
 					refreshToken,
@@ -274,8 +186,71 @@ public class AuthController {
 					user.getAvatar()));
 
 		} catch (Exception e) {
-			e.printStackTrace();
+			System.err.println("Google Login Error: " + e.getMessage());
 			return ResponseEntity.badRequest().body(new MessageResponse("Google login failed"));
 		}
+	}
+
+	@PostMapping("/forgot-password")
+	public ResponseEntity<?> forgotPassword(@RequestBody Map<String, String> request) {
+		try {
+			String email = request.get("email");
+			if (email == null || email.isEmpty()) {
+				return ResponseEntity.badRequest().body(new MessageResponse("Vui lòng nhập email"));
+			}
+
+			User user = userRepository.findByUsername(email).orElse(null);
+			
+			if (user == null) {
+				return ResponseEntity.status(404).body(new MessageResponse("Email not found"));
+			}
+			
+			if (user.isBlocked()) {
+				return ResponseEntity.status(403).body(new MessageResponse("Account is blocked"));
+			}
+			
+			if ("google".equals(user.getAuthType())) {
+				return ResponseEntity.badRequest().body(new MessageResponse("Google account cannot reset password here"));
+			}
+
+			// Generate token
+			String token = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32); 
+			user.setResetPasswordToken(token);
+			user.setResetPasswordExpires(new java.util.Date(System.currentTimeMillis() + 3600000)); // 1 hour
+			userRepository.save(user);
+
+			String resetUrl = "http://localhost:5173/reset-password/" + token;
+
+			mailService.sendEmail(user.getUsername(), "Password Reset Request", "Click the link to reset your password: " + resetUrl);
+			return ResponseEntity.ok(new MessageResponse("Reset link sent to your email"));
+			
+		} catch (Exception e) {
+			e.printStackTrace(); // Print to console for debugging
+			return ResponseEntity.internalServerError().body(new MessageResponse("Internal Error: " + e.toString()));
+		}
+	}
+	
+	@PostMapping("/reset-password")
+	public ResponseEntity<?> resetPassword(@RequestBody Map<String, String> request) {
+		String token = request.get("token");
+		String newPassword = request.get("newPassword");
+		
+		if (token == null || newPassword == null) {
+			return ResponseEntity.badRequest().body(new MessageResponse("Token and newPassword are required"));
+		}
+		
+		java.util.Date now = new java.util.Date();
+		User user = userRepository.findByResetPasswordTokenAndResetPasswordExpiresGreaterThan(token, now).orElse(null);
+		
+		if (user == null) {
+			return ResponseEntity.badRequest().body(new MessageResponse("Token is invalid or has expired"));
+		}
+		
+		user.setPassword(encoder.encode(newPassword));
+		user.setResetPasswordToken(null);
+		user.setResetPasswordExpires(null);
+		userRepository.save(user);
+		
+		return ResponseEntity.ok(new MessageResponse("Password has been reset successfully"));
 	}
 }

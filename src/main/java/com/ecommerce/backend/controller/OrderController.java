@@ -29,7 +29,7 @@ public class OrderController {
 	@Autowired
 	ProductRepository productRepository;
 
-	@PostMapping("/order")
+	@PostMapping("/orders")
 	public ResponseEntity<?> createOrder(@AuthenticationPrincipal UserDetailsImpl userDetails, @RequestBody Order orderRequest) {
 		try {
 			String userId = userDetails.getId();
@@ -113,7 +113,7 @@ public class OrderController {
 		return ResponseEntity.ok(Map.of("success", true, "data", orders));
 	}
 
-	@GetMapping("/order/{orderId}")
+	@GetMapping("/orders/{orderId}")
 	public ResponseEntity<?> getOrderById(@AuthenticationPrincipal UserDetailsImpl userDetails, @PathVariable String orderId) {
 		return orderRepository.findById(orderId)
 				.filter(o -> o.getUserId().equals(userDetails.getId()) && o.getDeletedAt() == null)
@@ -121,7 +121,7 @@ public class OrderController {
 				.orElse(ResponseEntity.status(404).body(Map.of("success", false, "message", "Không tìm thấy đơn hàng"))); // Type mismatch? Map is object
 	}
 
-	@DeleteMapping("/order/{orderId}")
+	@DeleteMapping("/orders/{orderId}")
 	public ResponseEntity<?> deleteOrder(@AuthenticationPrincipal UserDetailsImpl userDetails, @PathVariable String orderId) {
 		Optional<Order> orderOpt = orderRepository.findById(orderId);
 		if (orderOpt.isPresent()) {
@@ -136,7 +136,7 @@ public class OrderController {
 		return ResponseEntity.status(404).body(Map.of("success", false, "message", "Không tìm thấy đơn hàng"));
 	}
 
-	@PutMapping("/order/{orderId}")
+	@PutMapping("/orders/{orderId}")
 	public ResponseEntity<?> updateOrder(@AuthenticationPrincipal UserDetailsImpl userDetails, @PathVariable String orderId, @RequestBody Order updates) {
 		Optional<Order> orderOpt = orderRepository.findById(orderId);
 		if (orderOpt.isPresent()) {

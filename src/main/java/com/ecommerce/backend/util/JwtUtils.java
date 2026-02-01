@@ -1,7 +1,7 @@
 package com.ecommerce.backend.util;
 
+import com.ecommerce.backend.model.User;
 import io.jsonwebtoken.*;
-import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,18 +24,24 @@ public class JwtUtils {
 	@Value("${app.jwt.refresh-expiration-ms}")
 	private int refreshJwtExpirationMs;
 
-	public String generateJwtToken(String username) {
+	public String generateJwtToken(User user) {
 		return Jwts.builder()
-				.subject(username)
+				.subject(user.getUsername())
+				.claim("id", user.getId())
+				.claim("username", user.getUsername())
+				.claim("role", user.getRole())
 				.issuedAt(new Date())
 				.expiration(new Date((new Date()).getTime() + jwtExpirationMs))
 				.signWith(key(), Jwts.SIG.HS256)
 				.compact();
 	}
 
-	public String generateRefreshToken(String username) {
+	public String generateRefreshToken(User user) {
 		return Jwts.builder()
-				.subject(username)
+				.subject(user.getUsername())
+				.claim("id", user.getId())
+				.claim("username", user.getUsername())
+				.claim("role", user.getRole())
 				.issuedAt(new Date())
 				.expiration(new Date((new Date()).getTime() + refreshJwtExpirationMs))
 				.signWith(key(), Jwts.SIG.HS256)
@@ -43,42 +49,34 @@ public class JwtUtils {
 	}
 
 	public String getUserNameFromJwtToken(String token) {
-		return Jwts.parser()
+		Claims claims = Jwts.parser()
 				.verifyWith(key())
 				.build()
 				.parseSignedClaims(token)
-				.getPayload()
-				.getSubject();
+				.getPayload();
+		
+		String username = claims.getSubject(); // 'sub'
+		if (username == null) {
+			username = claims.get("username", String.class);
+		}
+		return username;
+	}
+
+	public String getUsernameFromRefreshToken(String token) {
+		return getUserNameFromJwtToken(token);
 	}
 
 	private SecretKey key() {
-		// Use simple bytes validation if secret is not Base64, but keyFor expects bytes.
-		// If secret is too short for HS256, this might fail unless we ensure it's long enough, 
-		// or use Keys.hmacShaKeyFor(Decoders.BASE64.decode(jwtSecret)) if Base64.
-		// Given Node.js "dunglv" is very short, standard HS256 requires 256 bits (32 bytes).
-		// "dunglv" is 6 bytes. This will throw an error with jjwt-api > 0.10.
-		// Node.js jsonwebtoken library is more lenient.
-		// To fix this without changing the key on the user side (which invalidates old tokens?),
-		// we might need to pad it or use a different signing method if possible, or just generate a secure key for Spring 
-		// and accept that old tokens might not work if we change logic. 
-		// BUT the user wants to KEEP logic.
-		// Node.js `jwt.sign` with a string secret uses HMAC SHA256 by default but treats the string as bytes.
-		// Java JJWT is strict. 
-		// WORKAROUND: Use the secret directly as bytes, but we might need to pad it or use a weak key strategy ONLY if absolutely necessary.
-		// However, for best practice in Spring Boot migration, we should probably warn the user or use a stronger key.
-		// But since I must follow the user's existing logic, I will try to use the key as is.
-		// Keys.hmacShaKeyFor() enforces length.
-		// Let's try to use a raw Builder or just accept that we might need a longer key.
-		// If I use the exact same string "dunglv", I need to ensure it works.
-		// Actually, let's just use the string bytes.
-		// The issue is `Keys.hmacShaKeyFor` throws specific WeakKeyException.
-		// We can suppress it or just use a generated key for new tokens and hope Node.js tokens aren't needed to be valid PERMANENTLY (access tokens expire in 1h).
-		// Refresh tokens are 7 days.
-		// If I change the key verification logic, old refresh tokens die.
-		// Let's stick to the plan: try to use the key. 
-		// If "dunglv" is the key, I will pad it or hash it? No, that changes the signature.
-		// I will just use the bytes. 
-		return Keys.hmacShaKeyFor(jwtSecret.getBytes()); // This might fail if < 32 bytes
+		byte[] keyBytes = jwtSecret.getBytes();
+		// HS256 requires at least 256 bits (32 bytes). 
+		// If the secret is shorter (like "dunglv"), we must pad it or hash it to reach 32 bytes.
+		// To match Node.js behavior which is more lenient, we can pad with zeros.
+		if (keyBytes.length < 32) {
+			byte[] paddedKey = new byte[32];
+			System.arraycopy(keyBytes, 0, paddedKey, 0, keyBytes.length);
+			return Keys.hmacShaKeyFor(paddedKey);
+		}
+		return Keys.hmacShaKeyFor(keyBytes);
 	}
 
 	public boolean validateJwtToken(String authToken) {

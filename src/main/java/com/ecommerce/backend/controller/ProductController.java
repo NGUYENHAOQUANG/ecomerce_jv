@@ -18,7 +18,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
@@ -186,16 +185,22 @@ public class ProductController {
 		if (currentOpt.isEmpty()) return ResponseEntity.status(404).body(Map.of("message", "Not found"));
 		
 		Product current = currentOpt.get();
-		List<Product> related;
-		if (current.getCategory() != null) {
-			related = productRepository.findByCategoryAndIdNotAndDeletedAtNull(current.getCategory(), productId);
-		} else {
-			// Fallback if no category (using type?)
-			// Logic: find by type? Repo doesn't have it.
-			related = new ArrayList<>();
+		
+		// Build query criteria
+		Criteria criteria = Criteria.where("id").ne(productId)
+			.and("deletedAt").is(null);
+		
+		if (current.getCategory() != null && !current.getCategory().isEmpty()) {
+			criteria.and("category").is(current.getCategory());
+		} else if (current.getType() != null && !current.getType().isEmpty()) {
+			// Fallback to type if no category
+			criteria.and("type").is(current.getType());
 		}
 		
-		return ResponseEntity.ok(Map.of("relatedProducts", related.stream().limit(5).collect(Collectors.toList())));
+		Query query = new Query(criteria).limit(5);
+		List<Product> related = mongoTemplate.find(query, Product.class);
+		
+		return ResponseEntity.ok(Map.of("relatedProducts", related));
 	}
 	
 	@GetMapping("/products/wishlist")

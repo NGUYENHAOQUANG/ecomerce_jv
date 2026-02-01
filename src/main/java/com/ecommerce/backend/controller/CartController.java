@@ -133,7 +133,7 @@ public class CartController {
 		return ResponseEntity.ok(Map.of("msg", "Decrease cart successfully", "data", cart));
 	}
 	
-	@DeleteMapping("/cart")
+	@DeleteMapping("/cart/deleteItem")
 	public ResponseEntity<?> deleteItemCart(@RequestBody Map<String, String> request) {
 		String userId = request.get("userId");
 		String productId = request.get("productId");
@@ -156,7 +156,7 @@ public class CartController {
 		}
 	}
 	
-	@DeleteMapping("/cart/all")
+	@DeleteMapping("/cart/delete/")
 	public ResponseEntity<?> deleteAllCart(@RequestBody Map<String, String> request) {
 		String userId = request.get("userId");
 		if (userId == null) return ResponseEntity.badRequest().body(Map.of("msg", "Missing userId"));
@@ -164,6 +164,8 @@ public class CartController {
 		List<Cart> carts = cartRepository.findByUserId(userId);
 		cartRepository.deleteAll(carts);
 		
-		return ResponseEntity.ok(Map.of("msg", "Deleted all cart items", "count", carts.size())); // Node returns deleted info
+		// Node.js returns: res.send(cart) which is the delete result { acknowledged: true, deletedCount: N }
+		// We return a similar map structure to satisfy frontend expectations if it relies on "deletedCount" or simply object existence
+		return ResponseEntity.ok(Map.of("acknowledged", true, "deletedCount", carts.size())); 
 	}
 }

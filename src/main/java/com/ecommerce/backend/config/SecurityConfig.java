@@ -17,6 +17,11 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.security.config.Customizer;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import java.util.Arrays;
 
 @Configuration
 @EnableMethodSecurity
@@ -43,6 +48,18 @@ public class SecurityConfig {
     }
 
     @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(Arrays.asList("*"));
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(Arrays.asList("*"));
+        configuration.setExposedHeaders(Arrays.asList("*"));
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
+    }
+
+    @Bean
     public DaoAuthenticationProvider authenticationProvider() {
         DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
 
@@ -64,19 +81,23 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http.csrf(csrf -> csrf.disable())
+        http.cors(Customizer.withDefaults()) // Enable CORS with default config
+                .csrf(csrf -> csrf.disable())
                 .exceptionHandling(exception -> exception.authenticationEntryPoint(unauthorizedHandler))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> 
-                    auth.requestMatchers("/api/auth/**").permitAll()
-                        .requestMatchers("/ping").permitAll()
-                        .requestMatchers("/api/product/**").permitAll() // Product routes
-                        .requestMatchers("/api/products/**").permitAll() // Wishlist
+                    auth.requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers("/api/register", "/api/login", "/api/google-login", "/api/refresh-token", "/api/forgot-password", "/api/reset-password").permitAll()
+                        .requestMatchers("/api/debug/**").permitAll()
+                        .requestMatchers("/ping", "/error").permitAll() // Add /error
+                        .requestMatchers("/api/product/**").permitAll()
+                        .requestMatchers("/api/products/**").permitAll()
                         .requestMatchers("/api/related-products/**").permitAll()
-                        .requestMatchers("/api/category/**").permitAll() // Category routes
+                        .requestMatchers("/api/category/**").permitAll()
                         .requestMatchers("/api/trending-keywords").permitAll()
                         .requestMatchers("/api/payment/sepay-callback").permitAll()
                         .requestMatchers("/api/upload").permitAll()
+                        .requestMatchers("/api/user/info/**").permitAll() // Allow getting user info if public profiles exist? or just to be safe if user JS calls it. But usually secure.
                         .requestMatchers("/api/admin/**").hasAnyAuthority("admin", "super_admin")
                         .anyRequest().authenticated()
                 );
