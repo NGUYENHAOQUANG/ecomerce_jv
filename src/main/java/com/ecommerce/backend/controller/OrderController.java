@@ -15,6 +15,11 @@ import org.springframework.web.bind.annotation.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
 @RequestMapping("/api")
@@ -28,6 +33,9 @@ public class OrderController {
 
 	@Autowired
 	ProductRepository productRepository;
+
+	@Autowired
+	MongoTemplate mongoTemplate;
 
 	@PostMapping("/orders")
 	public ResponseEntity<?> createOrder(@AuthenticationPrincipal UserDetailsImpl userDetails, @RequestBody Order orderRequest) {
@@ -86,13 +94,17 @@ public class OrderController {
 					.totalAmount(totalAmount)
 					.build();
 
+			// Manually set timestamps to ensure they are saved
+			Date now = new Date();
+			newOrder.setCreatedAt(now);
+			newOrder.setUpdatedAt(now);
+
 			Order savedOrder = orderRepository.save(newOrder);
 
 			// Soft delete cart items
-			Date now = new Date();
 			cartItems.forEach(c -> {
 				c.setDeletedAt(now);
-				cartRepository.save(c); // Or saveAll
+				cartRepository.save(c);
 			});
 
 			return ResponseEntity.status(201).body(Map.of(
@@ -101,15 +113,19 @@ public class OrderController {
 					"data", savedOrder
 			));
 		} catch (Exception e) {
+			e.printStackTrace();
 			return ResponseEntity.internalServerError().body(Map.of("success", false, "message", "Lỗi server khi tạo đơn hàng", "error", e.getMessage()));
 		}
 	}
 
 	@GetMapping("/orders")
 	public ResponseEntity<?> getOrdersByUser(@AuthenticationPrincipal UserDetailsImpl userDetails) {
-		List<Order> orders = orderRepository.findByUserId(userDetails.getId());
-		// Sort by createdAt desc manually if repo doesn't
-		orders.sort(Comparator.comparing(Order::getCreatedAt).reversed());
+		if (userDetails == null) return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
+		
+		Query query = new Query(Criteria.where("userId").is(userDetails.getId()));
+		query.with(Sort.by(Sort.Direction.DESC, "createdAt"));
+		List<Order> orders = mongoTemplate.find(query, Order.class);
+		
 		return ResponseEntity.ok(Map.of("success", true, "data", orders));
 	}
 
@@ -118,7 +134,7 @@ public class OrderController {
 		return orderRepository.findById(orderId)
 				.filter(o -> o.getUserId().equals(userDetails.getId()) && o.getDeletedAt() == null)
 				.map(o -> ResponseEntity.ok(Map.of("success", true, "data", o)))
-				.orElse(ResponseEntity.status(404).body(Map.of("success", false, "message", "Không tìm thấy đơn hàng"))); // Type mismatch? Map is object
+				.orElse(ResponseEntity.status(404).body(Map.of("success", false, "message", "Không tìm thấy đơn hàng")));
 	}
 
 	@DeleteMapping("/orders/{orderId}")
@@ -159,6 +175,8 @@ public class OrderController {
 			if (updates.getCities() != null) order.setCities(updates.getCities());
 			if (updates.getState() != null) order.setState(updates.getState());
 			if (updates.getCountry() != null) order.setCountry(updates.getCountry());
+			
+			order.setUpdatedAt(new Date());
 			
 			return ResponseEntity.ok(Map.of(
 					"success", true,
