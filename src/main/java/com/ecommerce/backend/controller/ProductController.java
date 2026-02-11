@@ -1,6 +1,7 @@
 package com.ecommerce.backend.controller;
 
 import com.ecommerce.backend.model.Category;
+import com.ecommerce.backend.model.Order;
 import com.ecommerce.backend.model.Product;
 import com.ecommerce.backend.repository.CategoryRepository;
 import com.ecommerce.backend.repository.ProductRepository;
@@ -237,29 +238,30 @@ public class ProductController {
 
 	@DeleteMapping("/product/{productId}")
 	public ResponseEntity<?> deleteProduct(@PathVariable String productId) {
-		// Logic: if ordered -> soft delete (update deletedAt)
-		// if not ordered -> hard delete
-		// Checking order existence (TODO: need Order repo)
-		
-		// For now assuming always ordered to be safe, OR mostly soft delete.
-		// Node.js logic:
-		// const isOrdered = await Order.findOne({ "items.productId": productId });
-		// if (isOrdered) ...
-		
-		// I will default to soft delete for safety until Order module is ready.
-		// Or perform hard delete if I can confirm? Use soft delete logic.
-		
 		return productRepository.findById(productId).map(p -> {
 			if (p.getDeletedAt() != null) {
 				// Restore
 				p.setDeletedAt(null);
 				productRepository.save(p);
-				return ResponseEntity.ok(Map.of("message", "Đã mở bán lại sản phẩm thành công."));
+				return ResponseEntity.ok(Map.of("message", "Đã mở bán lại sản phẩm thành công.", "data", p));
 			} else {
-				// Delete
-				p.setDeletedAt(new Date());
-				productRepository.save(p);
-				return ResponseEntity.ok(Map.of("message", "Đã chuyển sang trạng thái 'Ngừng kinh doanh'."));
+				// Check if product exists in any order
+				Query query = new Query(Criteria.where("items.productId").is(productId));
+				boolean hasOrders = mongoTemplate.exists(query, Order.class);
+
+				if (hasOrders) {
+					// Soft Delete
+					p.setDeletedAt(new Date());
+					productRepository.save(p);
+					return ResponseEntity.ok(Map.of("message", "Đã chuyển sang trạng thái 'Ngừng kinh doanh'.", "data", p));
+				} else {
+					// Hard Delete
+					productRepository.delete(p);
+					Map<String, Object> res = new HashMap<>();
+					res.put("message", "Đã xóa sản phẩm vĩnh viễn (do chưa có đơn hàng).");
+					res.put("data", null);
+					return ResponseEntity.ok(res);
+				}
 			}
 		}).orElse(ResponseEntity.status(404).body(Map.of("message", "Không tìm thấy sản phẩm")));
 	}

@@ -49,6 +49,7 @@ public class AdminController {
 	@GetMapping("/stats")
 	public ResponseEntity<?> getDashboardStats() {
 		try {
+			// Criteria for Revenue: (Paid or Completed or Delivered) AND Not Deleted
 			Criteria revenueCondition = new Criteria().andOperator(
 					Criteria.where("deletedAt").is(null),
 					new Criteria().orOperator(
@@ -57,7 +58,7 @@ public class AdminController {
 					)
 			);
 
-			// Total Revenue
+			// 1. Total Revenue
 			Aggregation totalRevAgg = newAggregation(
 					match(revenueCondition),
 					group().sum("totalAmount").as("total")
@@ -65,50 +66,88 @@ public class AdminController {
 			AggregationResults<Map> totalRevRes = mongoTemplate.aggregate(totalRevAgg, Order.class, Map.class);
 			double totalRevenue = totalRevRes.getUniqueMappedResult() != null ? ((Number) totalRevRes.getUniqueMappedResult().get("total")).doubleValue() : 0;
 
-			// Daily Revenue (Simplify date formatting with Mongo or Java processing if DB versions differ, assuming Mongo 4+)
-			// Using basic aggregation support. For specific date formatting, Spring Data often needs Custom Aggregation Operation or Extended JSON.
-			// Implementing simplified version: fetch relevant orders and process in Java to avoid timezone/version issues safely.
-			// Or using raw Aggregation logic.
-			
-			// Let's use Java stream processing for Daily/Monthly to be robust againts Mongo version issues
-			List<Order> validOrders = mongoTemplate.find(new Query(revenueCondition), Order.class);
-			
-			// Daily
-			Map<String, DoubleSummaryStatistics> dailyStats = validOrders.stream()
-					.collect(Collectors.groupingBy(
-							o -> o.getCreatedAt().toString().substring(0, 10), // Simplistic yyyy-MM-dd
-							Collectors.summarizingDouble(Order::getTotalAmount)
-					));
-			
-			List<Map<String, Object>> dailyRevenue = dailyStats.entrySet().stream()
-					.map(e -> (Map<String, Object>) new HashMap<String, Object>(Map.of("_id", e.getKey(), "total", e.getValue().getSum(), "orders", e.getValue().getCount())))
-					.sorted(Comparator.comparing(m -> (String)m.get("_id")))
-					.collect(Collectors.toList());
+			// 2. Daily Revenue (Using DateOperators for safety)
+			Aggregation dailyAgg = newAggregation(
+					match(revenueCondition),
+					project("totalAmount", "createdAt")
+						.and(org.springframework.data.mongodb.core.aggregation.DateOperators.dateOf("createdAt")
+								.withTimezone(org.springframework.data.mongodb.core.aggregation.DateOperators.Timezone.valueOf("+07:00"))
+								.toString("%Y-%m-%d")).as("dateStr"),
+					group("dateStr")
+						.sum("totalAmount").as("total")
+						.count().as("orders"),
+					sort(Sort.Direction.ASC, "_id")
+			);
+			AggregationResults<Map> dailyRes = mongoTemplate.aggregate(dailyAgg, Order.class, Map.class);
+			List<Map> dailyRevenue = dailyRes.getMappedResults();
 
-			List<Map<String, Object>> monthlyRevenue = new ArrayList<>();
-			// ... (Skipping complex Java aggregation for brevity, returning empty list or simple mock if tricky)
-			// Node.js does it in DB. Let's try to mimic Node.js aggregation in MongoTemplate if we can.
-			// For now, returning empty lists is safer than Crashing.
-			
-			// Recent Orders
+			// 3. Monthly Revenue (Using DateOperators for safety)
+			Aggregation monthlyAgg = newAggregation(
+					match(revenueCondition),
+					project("totalAmount", "createdAt")
+						.and(org.springframework.data.mongodb.core.aggregation.DateOperators.dateOf("createdAt")
+								.withTimezone(org.springframework.data.mongodb.core.aggregation.DateOperators.Timezone.valueOf("+07:00"))
+								.month()).as("month"),
+					group("month")
+						.sum("totalAmount").as("total")
+						.count().as("orders"),
+					sort(Sort.Direction.ASC, "_id")
+			);
+			AggregationResults<Map> monthlyRes = mongoTemplate.aggregate(monthlyAgg, Order.class, Map.class);
+			List<Map> monthlyRevenue = monthlyRes.getMappedResults();
+
+			// 4. Order Status Stats (Active orders)
+			Aggregation statusAgg = newAggregation(
+					match(Criteria.where("deletedAt").is(null)),
+					group("deliveryStatus").count().as("count")
+			);
+			AggregationResults<Map> statusRes = mongoTemplate.aggregate(statusAgg, Order.class, Map.class);
+			List<Map> orderStatusStats = statusRes.getMappedResults();
+
+			// 5. Top Products (Best Selling)
+			Aggregation topProdAgg = newAggregation(
+					match(Criteria.where("deletedAt").is(null)),
+					unwind("items"),
+					group("items.productId")
+						.sum("items.quantity").as("totalSold")
+						.sum(
+							org.springframework.data.mongodb.core.aggregation.ArithmeticOperators.Multiply.valueOf("items.price").multiplyBy("items.quantity")
+						).as("revenue"),
+					sort(Sort.Direction.DESC, "totalSold"),
+					limit(5),
+					lookup("products", "_id", "_id", "productInfo"),
+					unwind("productInfo"),
+					project("totalSold", "revenue")
+						.and("productInfo.name").as("name")
+						.and("productInfo.price").as("price")
+						.and(org.springframework.data.mongodb.core.aggregation.ArrayOperators.ArrayElemAt.arrayOf("productInfo.images").elementAt(0)).as("image")
+			);
+			AggregationResults<Map> topProdRes = mongoTemplate.aggregate(topProdAgg, Order.class, Map.class);
+			List<Map> topProducts = topProdRes.getMappedResults();
+
+			// 6. Recent Orders
 			Query recentQ = new Query(Criteria.where("deletedAt").is(null));
 			recentQ.with(Sort.by(Sort.Direction.DESC, "createdAt")).limit(5);
+			recentQ.fields().include("firstName", "lastName", "totalAmount", "deliveryStatus", "createdAt");
 			List<Order> recentOrders = mongoTemplate.find(recentQ, Order.class);
 
-			// Counts
+			// 7. Counts (Correctly filtering deletedAt: null)
 			long totalUsers = userRepository.countByRole("user");
-			long totalProducts = productRepository.count(); // active? Node says deletedAt: null
-			long totalOrders = orderRepository.count(); // active? Node says deletedAt: null
+			long totalProducts = mongoTemplate.count(new Query(Criteria.where("deletedAt").is(null)), Product.class); 
+			long totalOrders = mongoTemplate.count(new Query(Criteria.where("deletedAt").is(null)), Order.class);
 
 			Map<String, Object> response = new HashMap<>();
 			response.put("totalRevenue", totalRevenue);
-			response.put("dailyRevenue", dailyRevenue); // Populated by Java Stream
-			response.put("monthlyRevenue", monthlyRevenue); // Empty
+			response.put("dailyRevenue", dailyRevenue);
+			response.put("monthlyRevenue", monthlyRevenue);
+			response.put("orderStatusStats", orderStatusStats);
 			response.put("recentOrders", recentOrders);
+			response.put("topProducts", topProducts);
 			response.put("counts", Map.of("users", totalUsers, "products", totalProducts, "orders", totalOrders));
 
 			return ResponseEntity.ok(response);
 		} catch (Exception e) {
+			e.printStackTrace();
 			return ResponseEntity.internalServerError().body(Map.of("message", e.getMessage()));
 		}
 	}
@@ -201,18 +240,31 @@ public class AdminController {
 		if (category != null && !category.equals("all")) criteria.and("category").is(category);
 		
 		if (search != null && !search.isEmpty()) {
-			criteria.orOperator(Criteria.where("name").regex(search, "i")); // Simplified regex
+			criteria.orOperator(Criteria.where("name").regex(search, "i"));
 		}
 
-		Sort sort = Sort.by(Sort.Direction.DESC, "createdAt"); // Default
-		// Map sortType logic similar to ProductController
+		Sort sort = Sort.by(Sort.Direction.DESC, "createdAt");
 		
 		Query query = new Query(criteria).with(sort);
 		long total = mongoTemplate.count(query, Product.class);
 		query.with(org.springframework.data.domain.PageRequest.of(page - 1, limit));
 		List<Product> products = mongoTemplate.find(query, Product.class);
+
+		List<String> productIds = products.stream().map(Product::getId).collect(Collectors.toList());
+		List<String> orderedIds = mongoTemplate.findDistinct(
+				new Query(Criteria.where("items.productId").in(productIds)), 
+				"items.productId", Order.class, String.class);
+		Set<String> orderedSet = new HashSet<>(orderedIds);
 		
-		return ResponseEntity.ok(Map.of("contents", products, "total", total, "page", page, "limit", limit));
+		com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+		List<Map<String, Object>> content = products.stream().map(p -> {
+			Map<String, Object> map = mapper.convertValue(p, Map.class);
+			map.put("hasOrders", orderedSet.contains(p.getId()));
+			return map;
+		}).collect(Collectors.toList());
+		
+		return ResponseEntity.ok(Map.of("contents", content, "total", total, "page", page, "limit", limit));
 	}
 
 	// --- 5. ORDER MANAGEMENT ---
