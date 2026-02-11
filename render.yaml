@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: ecommerce-backend
+    env: java
+    buildCommand: mvn clean package -DskipTests
+    startCommand: java -jar target/backend.jar
+    envVars:
+      - key: SERVER_PORT
+        value: 5000
+      - key: SPRING_DATA_MONGODB_URI
+        sync: false
+      - key: APP_JWT_SECRET
+        sync: false
+      - key: APP_JWT_EXPIRATION_MS
+        value: 3600000
+      - key: APP_JWT_REFRESH_EXPIRATION_MS
+        value: 604800000
+      - key: SPRING_MAIL_HOST
+        value: smtp.gmail.com
+      - key: SPRING_MAIL_PORT
+        value: 587
+      - key: SPRING_MAIL_USERNAME
+        sync: false
+      - key: SPRING_MAIL_PASSWORD
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: IMAGEKIT_URL_ENDPOINT
+        sync: false
+      - key: IMAGEKIT_PUBLIC_KEY
+        sync: false
+      - key: IMAGEKIT_PRIVATE_KEY
+        sync: false
+      - key: SEPAY_API_KEY
+        sync: false
