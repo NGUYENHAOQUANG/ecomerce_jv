@@ -4,6 +4,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -25,6 +27,14 @@ public class ImageKitService {
 
 	public Map<String, Object> uploadImage(byte[] fileBytes, String fileName, String folder) throws Exception {
 		String url = "https://upload.imagekit.io/api/v1/files/upload";
+
+		System.out.println("=== ImageKit Upload Debug ===");
+		System.out.println("URL Endpoint: " + urlEndpoint);
+		System.out.println("Public Key: " + publicKey);
+		System.out.println("Private Key: " + (privateKey != null ? "***SET***" : "NULL"));
+		System.out.println("File Name: " + fileName);
+		System.out.println("File Size: " + fileBytes.length + " bytes");
+		System.out.println("Folder: " + folder);
 
 		// Create multipart form data
 		HttpHeaders headers = new HttpHeaders();
@@ -51,13 +61,27 @@ public class ImageKitService {
 
 		HttpEntity<org.springframework.util.LinkedMultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
 
-		ResponseEntity<Map<String, Object>> response = restTemplate.exchange(url, HttpMethod.POST, requestEntity, 
-				new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {});
+		try {
+			ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, requestEntity, Map.class);
 
-		if (response.getStatusCode() == HttpStatus.OK || response.getStatusCode() == HttpStatus.CREATED) {
-			return response.getBody();
-		} else {
-			throw new Exception("ImageKit upload failed: " + response.getStatusCode());
+			System.out.println("ImageKit Response Status: " + response.getStatusCode());
+			System.out.println("ImageKit Response Body: " + response.getBody());
+
+			if (response.getStatusCode() == HttpStatus.OK || response.getStatusCode() == HttpStatus.CREATED) {
+				@SuppressWarnings("unchecked")
+				Map<String, Object> result = response.getBody();
+				return result;
+			} else {
+				throw new Exception("ImageKit upload failed: " + response.getStatusCode());
+			}
+		} catch (HttpClientErrorException | HttpServerErrorException e) {
+			System.err.println("ImageKit HTTP Error: " + e.getStatusCode());
+			System.err.println("ImageKit Error Body: " + e.getResponseBodyAsString());
+			throw new Exception("ImageKit upload failed: " + e.getStatusCode() + " - " + e.getResponseBodyAsString());
+		} catch (Exception e) {
+			System.err.println("ImageKit General Error: " + e.getMessage());
+			e.printStackTrace();
+			throw e;
 		}
 	}
 }
