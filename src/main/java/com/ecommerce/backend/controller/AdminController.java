@@ -268,52 +268,18 @@ public class AdminController {
 	}
 
 	// --- 5. ORDER MANAGEMENT ---
-	// --- 5. ORDER MANAGEMENT ---
 	@GetMapping("/orders")
 	public ResponseEntity<?> getAllOrders(@RequestParam(defaultValue = "1") int page,
 										  @RequestParam(defaultValue = "10") int limit,
 										  @RequestParam(required = false) String search,
-										  @RequestParam(required = false) String status,
-										  @RequestParam(required = false) String paymentStatus,
-										  @RequestParam(required = false) String startDate,
-										  @RequestParam(required = false) String endDate) {
+										  @RequestParam(required = false) String status) {
 		Criteria criteria = Criteria.where("deletedAt").is(null);
-		
 		if (status != null && !status.equals("all")) criteria.and("deliveryStatus").is(status);
-		
-		if (paymentStatus != null && !paymentStatus.equals("all")) criteria.and("paymentStatus").is(paymentStatus);
-		
-		if (startDate != null || endDate != null) {
-			try {
-				Criteria dateCriteria = Criteria.where("createdAt");
-				if (startDate != null) {
-					dateCriteria.gte(new java.text.SimpleDateFormat("yyyy-MM-dd").parse(startDate));
-				}
-				if (endDate != null) {
-					Date end = new java.text.SimpleDateFormat("yyyy-MM-dd").parse(endDate);
-					// Set to end of day
-					Calendar c = Calendar.getInstance();
-					c.setTime(end);
-					c.set(Calendar.HOUR_OF_DAY, 23);
-					c.set(Calendar.MINUTE, 59);
-					c.set(Calendar.SECOND, 59);
-					c.set(Calendar.MILLISECOND, 999);
-					dateCriteria.lte(c.getTime());
-				}
-				criteria.andOperator(dateCriteria);
-			} catch (Exception e) {
-				// Ignore date parse errors
-			}
-		}
-
 		if (search != null && !search.isEmpty()) {
-			String searchRegex = ".*" + java.util.regex.Pattern.quote(search) + ".*";
 			criteria.orOperator(
 				Criteria.where("firstName").regex(search, "i"),
-				Criteria.where("lastName").regex(search, "i"), // Added lastName search
 				Criteria.where("email").regex(search, "i"),
-				Criteria.where("phone").regex(search, "i"),
-				Criteria.where("_id").is(search) // Support search by ID
+				Criteria.where("phone").regex(search, "i")
 			);
 		}
 		
@@ -322,62 +288,7 @@ public class AdminController {
 		query.with(org.springframework.data.domain.PageRequest.of(page - 1, limit));
 		List<Order> orders = mongoTemplate.find(query, Order.class);
 		
-		// MANUALLY POPULATE USER AND PRODUCT DATA TO MATCH NODE.JS STRUCTURE
-		Set<String> userIds = orders.stream().map(Order::getUserId).filter(Objects::nonNull).collect(Collectors.toSet());
-		Set<String> productIds = orders.stream()
-			.flatMap(o -> o.getItems() != null ? o.getItems().stream() : java.util.stream.Stream.empty())
-			.map(Order.OrderItem::getProductId)
-			.filter(Objects::nonNull)
-			.collect(Collectors.toSet());
-
-		Map<String, User> userMap = userRepository.findAllById(userIds).stream()
-			.collect(Collectors.toMap(User::getId, u -> u));
-		Map<String, Product> productMap = productRepository.findAllById(productIds).stream()
-			.collect(Collectors.toMap(Product::getId, p -> p));
-
-		com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-
-		List<Map<String, Object>> responseContent = orders.stream().map(order -> {
-			Map<String, Object> orderMap = mapper.convertValue(order, Map.class);
-			
-			// Replace userId with object
-			if (order.getUserId() != null) {
-				User u = userMap.get(order.getUserId());
-				if (u != null) {
-					orderMap.put("userId", Map.of(
-						"_id", u.getId(),
-						"username", u.getUsername(),
-						"email", u.getEmail(),
-						"firstName", u.getFirstName() != null ? u.getFirstName() : "",
-						"lastName", u.getLastName() != null ? u.getLastName() : "",
-						"phone", u.getPhone() != null ? u.getPhone() : ""
-					));
-				}
-			}
-			
-			// Replace items.productId with object
-			List<Map<String, Object>> items = (List<Map<String, Object>>) orderMap.get("items");
-			if (items != null) {
-				items.forEach(item -> {
-					String pId = (String) item.get("productId");
-					if (pId != null) {
-						Product p = productMap.get(pId);
-						if (p != null) {
-							item.put("productId", Map.of(
-								"_id", p.getId(),
-								"name", p.getName(),
-								"images", p.getImages(),
-								"price", p.getPrice()
-							));
-						}
-					}
-				});
-			}
-			
-			return orderMap;
-		}).collect(Collectors.toList());
-		
-		return ResponseEntity.ok(Map.of("contents", responseContent, "total", total, "page", page, "limit", limit));
+		return ResponseEntity.ok(Map.of("contents", orders, "total", total, "page", page, "limit", limit));
 	}
 	
 	@PutMapping("/orders/{orderId}")
@@ -386,37 +297,25 @@ public class AdminController {
 		Order order = orderRepository.findById(orderId).orElse(null);
 		if (order == null) return ResponseEntity.status(404).body(Map.of("message", "Order not found"));
 		
-		// Logic update status - MATCH NODE.JS LOGIC EXACTLY
+		order.setDeliveryStatus(deliveryStatus);
 		
-		// 1. Nếu Admin chọn "Hủy" -> Hủy luôn thanh toán
+		// Auto update payment logic
 		if ("cancelled".equals(deliveryStatus)) {
 			order.setPaymentStatus("cancelled");
-		} 
-		// 2. Nếu Admin chọn "Giao thành công" (delivered)
-		else if ("delivered".equals(deliveryStatus)) {
-			// Chỉ cập nhật thành 'paid' nếu chưa hoàn thành
+		} else if ("delivered".equals(deliveryStatus)) {
 			if (!"completed".equals(order.getPaymentStatus())) {
 				order.setPaymentStatus("paid");
+				if (order.getPaymentInfo().getPaidAt() == null) {
+					order.getPaymentInfo().setPaidAt(new Date());
+				}
 			}
-			// Cập nhật ngày thanh toán nếu chưa có
-			if (order.getPaymentInfo() == null) order.setPaymentInfo(new Order.PaymentInfo());
-			if (order.getPaymentInfo().getPaidAt() == null) {
-				order.getPaymentInfo().setPaidAt(new Date());
-			}
-		} 
-		// 3. Nếu Admin chọn các trạng thái đang xử lý (pending, processing, shipped)
-		else {
-			// Nếu là COD -> Chắc chắn là chưa thanh toán (pending)
+		} else {
+			// Reset to pending if COD and not completed
 			if ("cod".equals(order.getPaymentMethods())) {
-				order.setPaymentStatus("pending");
-			}
-			// Nếu là QR -> Chỉ reset về 'pending' nu nó chưa từng thành công (chưa phải 'completed' hay 'paid')
-			else if (!"completed".equals(order.getPaymentStatus()) && !"paid".equals(order.getPaymentStatus())) {
 				order.setPaymentStatus("pending");
 			}
 		}
 		
-		order.setDeliveryStatus(deliveryStatus);
 		orderRepository.save(order);
 		return ResponseEntity.ok(Map.of("message", "Update status successfully", "data", order));
 	}
