@@ -41,8 +41,19 @@ public class OrderController {
 	public ResponseEntity<?> createOrder(@AuthenticationPrincipal UserDetailsImpl userDetails, @RequestBody Order orderRequest) {
 		try {
 			String userId = userDetails.getId();
-			// Validate fields manually or use logic
-			if (orderRequest.getFirstName() == null || orderRequest.getEmail() == null || orderRequest.getPaymentMethods() == null) {
+			
+			// Validate required fields (matching Node.js logic exactly)
+			if (orderRequest.getFirstName() == null || orderRequest.getFirstName().trim().isEmpty() ||
+				orderRequest.getLastName() == null || orderRequest.getLastName().trim().isEmpty() ||
+				orderRequest.getCountry() == null || orderRequest.getCountry().trim().isEmpty() ||
+				orderRequest.getStreet() == null || orderRequest.getStreet().trim().isEmpty() ||
+				orderRequest.getCities() == null || orderRequest.getCities().trim().isEmpty() ||
+				orderRequest.getState() == null || orderRequest.getState().trim().isEmpty() ||
+				orderRequest.getPhone() == null || orderRequest.getPhone().trim().isEmpty() ||
+				orderRequest.getZipCode() == null || orderRequest.getZipCode().trim().isEmpty() ||
+				orderRequest.getEmail() == null || orderRequest.getEmail().trim().isEmpty() ||
+				orderRequest.getPaymentMethods() == null || orderRequest.getPaymentMethods().trim().isEmpty() ||
+				orderRequest.getPaymentStatus() == null || orderRequest.getPaymentStatus().trim().isEmpty()) {
 				return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Vui lòng điền đầy đủ thông tin bắt buộc"));
 			}
 
@@ -78,10 +89,10 @@ public class OrderController {
 					.userId(userId)
 					.firstName(orderRequest.getFirstName())
 					.lastName(orderRequest.getLastName())
-					.companyName(orderRequest.getCompanyName())
+					.companyName(orderRequest.getCompanyName() != null ? orderRequest.getCompanyName() : "")
 					.country(orderRequest.getCountry())
 					.street(orderRequest.getStreet())
-					.apartment(orderRequest.getApartment())
+					.apartment(orderRequest.getApartment() != null ? orderRequest.getApartment() : "")
 					.cities(orderRequest.getCities())
 					.state(orderRequest.getState())
 					.phone(orderRequest.getPhone())
