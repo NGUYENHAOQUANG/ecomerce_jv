@@ -52,8 +52,7 @@ public class OrderController {
 				orderRequest.getPhone() == null || orderRequest.getPhone().trim().isEmpty() ||
 				orderRequest.getZipCode() == null || orderRequest.getZipCode().trim().isEmpty() ||
 				orderRequest.getEmail() == null || orderRequest.getEmail().trim().isEmpty() ||
-				orderRequest.getPaymentMethods() == null || orderRequest.getPaymentMethods().trim().isEmpty() ||
-				orderRequest.getPaymentStatus() == null || orderRequest.getPaymentStatus().trim().isEmpty()) {
+				orderRequest.getPaymentMethods() == null || orderRequest.getPaymentMethods().trim().isEmpty()) {
 				return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Vui lòng điền đầy đủ thông tin bắt buộc"));
 			}
 
@@ -100,7 +99,7 @@ public class OrderController {
 					.email(orderRequest.getEmail())
 					.deliveryStatus("pending")
 					.paymentMethods(orderRequest.getPaymentMethods())
-					.paymentStatus(orderRequest.getPaymentStatus())
+					.paymentStatus("pending")
 					.items(orderItems)
 					.totalAmount(totalAmount)
 					.build();
